@@ -38,6 +38,7 @@ label{color:var(--muted);font-size:12px}
   <input id="endpoint" size="34" placeholder="Endpoint">
   <input id="key" size="30" type="password" placeholder="API key (blank = server env)">
   <input id="caps" size="24" value="octo/pricing" title="Octo-Capabilities header">
+  <label><input type="checkbox" id="direct"> Direct (no proxy)</label>
   <button id="btnSupplier">Test connection</button>
 </header>
 <main>
@@ -73,13 +74,34 @@ const S = { products: [], product: null, option: null, avail: null, booking: nul
 const today = new Date(), iso = d => d.toISOString().slice(0, 10);
 $("d1").value = iso(today); $("d2").value = iso(new Date(today.getTime() + 14 * 864e5));
 
-fetch("/config").then(r => r.json()).then(c => { $("endpoint").value = c.endpoint; if (c.hasKey) $("key").placeholder = "using server env key"; });
+$("endpoint").value = "https://api.ventrata.com/octo";
+fetch("/config").then(r => r.json()).then(c => { $("endpoint").value = c.endpoint; if (c.hasKey) $("key").placeholder = "using server env key"; })
+  .catch(() => { $("direct").checked = true; });
 
 async function api(method, path, body) {
   const h = { "Content-Type": "application/json", "X-Octo-Capabilities": $("caps").value };
   if ($("endpoint").value) h["X-Octo-Endpoint"] = $("endpoint").value;
   if ($("key").value) h["X-Octo-Key"] = $("key").value;
-  const r = await (await fetch("/proxy" + path, { method, headers: h, body: body ? JSON.stringify(body) : undefined })).json();
+  let r;
+  if ($("direct").checked) {
+    const t0 = Date.now(), url = $("endpoint").value.replace(/\/$/, "") + path;
+    try {
+      const resp = await fetch(url, { method, headers: { "Authorization": "Bearer " + $("key").value, "Content-Type": "application/json", "Octo-Capabilities": $("caps").value }, body: body ? JSON.stringify(body) : undefined });
+      const raw = await resp.text(); let parsed; try { parsed = JSON.parse(raw); } catch { parsed = raw; }
+      r = { status: resp.status, ms: Date.now() - t0, body: parsed };
+    } catch (e) {
+      r = { status: 0, ms: Date.now() - t0, body: { error: String(e), hint: "Likely blocked by CORS (the API does not allow browser calls from this origin) or a network error. Use the proxy, i.e. run server.js, or a serverless proxy." } };
+    }
+  } else try {
+    const resp = await fetch("/proxy" + path, { method, headers: h, body: body ? JSON.stringify(body) : undefined });
+    const raw = await resp.text();
+    try { r = JSON.parse(raw); }
+    catch {
+      r = { status: 0, ms: 0, body: { error: "Proxy did not return JSON (HTTP " + resp.status + "). This page is probably not being served by server.js. Run `node server.js` and open http://localhost:3000 instead of opening the file directly or using another dev server.", received: raw.slice(0, 200) } };
+    }
+  } catch (e) {
+    r = { status: 0, ms: 0, body: { error: "Cannot reach the local server: " + e + ". Is `node server.js` running?" } };
+  }
   const d = document.createElement("details"); d.className = "entry";
   const cls = r.status >= 200 && r.status < 300 ? "ok" : "err";
   d.innerHTML = `<summary><b>${method}</b> ${path} <span class="${cls}">${r.status}</span> ${r.ms}ms</summary><pre></pre>`;
