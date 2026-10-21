@@ -1,0 +1,10 @@
+{
+  "name": "octo-reseller-tester",
+  "version": "0.1.0",
+  "description": "Local test UI and proxy for exercising the OCTO (Open Connectivity for Tours and Activities) API as a reseller.",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
+  "keywords": ["octo", "ventrata", "tours", "activities", "api", "reseller"],
+  "license": "MIT"
+}

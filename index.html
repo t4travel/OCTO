@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OCTO Reseller Tester</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--text:#1a1d21;--muted:#6b7280;--line:#e2e5ea;--accent:#2563eb;--ok:#15803d;--err:#b91c1c;--code:#0f172a;--codet:#e2e8f0}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1115;--card:#181b21;--text:#e8eaed;--muted:#9aa3af;--line:#2a2f38;--accent:#60a5fa;--ok:#4ade80;--err:#f87171}}
+*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--text)}
+header{padding:12px 20px;border-bottom:1px solid var(--line);background:var(--card);display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+header h1{font-size:16px;margin:0 12px 0 0}
+main{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;padding:16px 20px}
+@media (max-width:900px){main{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px;margin-bottom:16px}
+.card h2{font-size:14px;margin:0 0 10px}
+input,select,button{font:inherit;padding:6px 9px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--text)}
+input[type=number]{width:64px}
+button{background:var(--accent);color:#fff;border:0;cursor:pointer}button.sec{background:var(--bg);color:var(--text);border:1px solid var(--line)}
+button:disabled{opacity:.5;cursor:not-allowed}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+label{color:var(--muted);font-size:12px}
+.list{max-height:200px;overflow:auto;border:1px solid var(--line);border-radius:6px}
+.item{padding:7px 10px;border-bottom:1px solid var(--line);cursor:pointer}.item:last-child{border:0}
+.item:hover{background:var(--bg)}.item.sel{outline:2px solid var(--accent);outline-offset:-2px}
+.muted{color:var(--muted);font-size:12px}
+.pill{display:inline-block;padding:1px 7px;border-radius:99px;font-size:11px;border:1px solid var(--line);margin-left:4px}
+#log{max-height:80vh;overflow:auto}
+.entry{border:1px solid var(--line);border-radius:6px;margin-bottom:8px}
+.entry summary{padding:6px 10px;cursor:pointer;font-family:ui-monospace,monospace;font-size:12px}
+.entry pre{margin:0;padding:10px;background:var(--code);color:var(--codet);overflow:auto;max-height:300px;font-size:11px;border-radius:0 0 6px 6px}
+.ok{color:var(--ok)}.err{color:var(--err)}
+</style>
+</head>
+<body>
+<header>
+  <h1>OCTO Reseller Tester</h1>
+  <input id="endpoint" size="34" placeholder="Endpoint">
+  <input id="key" size="30" type="password" placeholder="API key (blank = server env)">
+  <input id="caps" size="24" value="octo/pricing" title="Octo-Capabilities header">
+  <button id="btnSupplier">Test connection</button>
+</header>
+<main>
+<div>
+  <div class="card"><h2>1. Products</h2>
+    <div class="row"><button id="btnProducts">GET /products</button><span class="muted" id="pcount"></span></div>
+    <div class="list" id="products"></div>
+  </div>
+  <div class="card"><h2>2. Option &amp; units</h2>
+    <div class="row"><label>Option</label><select id="option"></select></div>
+    <div id="units" class="muted">Select a product first.</div>
+  </div>
+  <div class="card"><h2>3. Availability</h2>
+    <div class="row"><label>From</label><input type="date" id="d1"><label>To</label><input type="date" id="d2">
+      <button id="btnCal" class="sec">Calendar</button><button id="btnAvail">Availability</button></div>
+    <div class="list" id="avail"></div>
+  </div>
+  <div class="card"><h2>4. Booking</h2>
+    <div class="row"><label>Name</label><input id="cname" value="Test Booker"><label>Email</label><input id="cemail" value="test@example.com"><label>Phone</label><input id="cphone" value="+910000000000"></div>
+    <div class="row">
+      <button id="btnReserve">Reserve</button><button id="btnConfirm" disabled>Confirm</button>
+      <button id="btnExtend" class="sec" disabled>Extend hold</button><button id="btnCancel" class="sec" disabled>Cancel</button>
+      <button id="btnGet" class="sec" disabled>GET booking</button>
+    </div>
+    <div class="muted" id="bstate">No booking yet. Use test products only: confirm creates real bookings.</div>
+  </div>
+</div>
+<div class="card"><h2>Request log <button class="sec" id="btnClear" style="float:right">Clear</button></h2><div id="log"></div></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const S = { products: [], product: null, option: null, avail: null, booking: null };
+const today = new Date(), iso = d => d.toISOString().slice(0, 10);
+$("d1").value = iso(today); $("d2").value = iso(new Date(today.getTime() + 14 * 864e5));
+
+fetch("/config").then(r => r.json()).then(c => { $("endpoint").value = c.endpoint; if (c.hasKey) $("key").placeholder = "using server env key"; });
+
+async function api(method, path, body) {
+  const h = { "Content-Type": "application/json", "X-Octo-Capabilities": $("caps").value };
+  if ($("endpoint").value) h["X-Octo-Endpoint"] = $("endpoint").value;
+  if ($("key").value) h["X-Octo-Key"] = $("key").value;
+  const r = await (await fetch("/proxy" + path, { method, headers: h, body: body ? JSON.stringify(body) : undefined })).json();
+  const d = document.createElement("details"); d.className = "entry";
+  const cls = r.status >= 200 && r.status < 300 ? "ok" : "err";
+  d.innerHTML = `<summary><b>${method}</b> ${path} <span class="${cls}">${r.status}</span> ${r.ms}ms</summary><pre></pre>`;
+  d.querySelector("pre").textContent = (body ? "// request\n" + JSON.stringify(body, null, 2) + "\n\n// response\n" : "") + JSON.stringify(r.body, null, 2);
+  $("log").prepend(d); if (cls === "err") d.open = true;
+  return r;
+}
+
+$("btnClear").onclick = () => $("log").innerHTML = "";
+$("btnSupplier").onclick = async () => { let r = await api("GET", "/supplier"); if (r.status === 404) await api("GET", "/suppliers"); };
+
+$("btnProducts").onclick = async () => {
+  const r = await api("GET", "/products");
+  S.products = Array.isArray(r.body) ? r.body : [];
+  $("pcount").textContent = S.products.length + " products";
+  $("products").innerHTML = "";
+  S.products.forEach(p => {
+    const el = document.createElement("div"); el.className = "item";
+    el.innerHTML = `${p.internalName || p.title || p.id}<span class="pill">${p.availabilityType || ""}</span><div class="muted">${p.id}</div>`;
+    el.onclick = () => { document.querySelectorAll("#products .item").forEach(x => x.classList.remove("sel")); el.classList.add("sel"); pick(p); };
+    $("products").appendChild(el);
+  });
+};
+
+function pick(p) {
+  S.product = p; S.avail = null;
+  $("option").innerHTML = (p.options || []).map(o => `<option value="${o.id}">${o.internalName || o.title || o.id}</option>`).join("");
+  $("option").onchange = renderUnits; renderUnits();
+}
+function renderUnits() {
+  S.option = (S.product.options || []).find(o => o.id === $("option").value);
+  const units = S.option?.units || [];
+  $("units").innerHTML = units.length ? "" : "No units on this option.";
+  units.forEach(u => {
+    const row = document.createElement("div"); row.className = "row";
+    row.innerHTML = `<input type="number" min="0" value="${u.type === "ADULT" ? 1 : 0}" data-unit="${u.id}"><span>${u.internalName || u.type} <span class="muted">(${u.type}${u.restrictions ? ", min " + u.restrictions.minQuantity + " max " + u.restrictions.maxQuantity : ""})</span></span>`;
+    $("units").appendChild(row);
+  });
+}
+const unitQty = () => [...document.querySelectorAll("#units input")].map(i => ({ id: i.dataset.unit, quantity: +i.value })).filter(u => u.quantity > 0);
+const availBody = () => ({ productId: S.product.id, optionId: S.option.id, localDateStart: $("d1").value, localDateEnd: $("d2").value, units: unitQty() });
+const need = () => { if (!S.product || !S.option) { alert("Select a product and option first."); return false; } return true; };
+
+$("btnCal").onclick = async () => {
+  if (!need()) return;
+  const r = await api("POST", "/availability/calendar", availBody());
+  if (!Array.isArray(r.body)) return;
+  $("avail").innerHTML = r.body.map(d => `<div class="item" data-d="${d.localDate}">${d.localDate} <span class="pill">${d.available ? "available" : "sold out"}</span> <span class="pill">${d.status || ""}</span></div>`).join("");
+  document.querySelectorAll("#avail .item").forEach(el => el.onclick = () => { $("d1").value = $("d2").value = el.dataset.d; $("btnAvail").click(); });
+};
+
+$("btnAvail").onclick = async () => {
+  if (!need()) return;
+  const r = await api("POST", "/availability", availBody());
+  if (!Array.isArray(r.body)) return;
+  $("avail").innerHTML = "";
+  r.body.forEach(a => {
+    const el = document.createElement("div"); el.className = "item";
+    const price = a.pricing ? ` ${a.pricing.currency} ${(a.pricing.retail / 100).toFixed(2)}` : "";
+    el.innerHTML = `${a.localDateTimeStart || a.id} <span class="pill">${a.available ? "available" : "sold out"}</span><span class="pill">${a.status || ""}</span>${a.vacancies != null ? `<span class="pill">${a.vacancies} left</span>` : ""}${price}<div class="muted">${a.id}</div>`;
+    el.onclick = () => { document.querySelectorAll("#avail .item").forEach(x => x.classList.remove("sel")); el.classList.add("sel"); S.avail = a; };
+    $("avail").appendChild(el);
+  });
+};
+
+function setBooking(b) {
+  S.booking = b;
+  const on = !!b?.uuid;
+  ["btnConfirm", "btnExtend", "btnCancel", "btnGet"].forEach(i => $(i).disabled = !on);
+  $("bstate").textContent = on ? `uuid ${b.uuid} | status ${b.status} | ${b.utcExpiresAt ? "expires " + b.utcExpiresAt : ""}` : "";
+}
+
+$("btnReserve").onclick = async () => {
+  if (!need()) return;
+  if (!S.avail) return alert("Select an availability slot first.");
+  const unitItems = unitQty().flatMap(u => Array(u.quantity).fill({ unitId: u.id }));
+  const r = await api("POST", "/bookings", { productId: S.product.id, optionId: S.option.id, availabilityId: S.avail.id, unitItems });
+  if (r.body?.uuid) setBooking(r.body);
+};
+$("btnConfirm").onclick = async () => {
+  const r = await api("POST", `/bookings/${S.booking.uuid}/confirm`, {
+    contact: { fullName: $("cname").value, emailAddress: $("cemail").value, phoneNumber: $("cphone").value },
+    resellerReference: "octo-tester-" + Date.now()
+  });
+  if (r.body?.uuid) setBooking(r.body);
+};
+$("btnExtend").onclick = async () => { const r = await api("POST", `/bookings/${S.booking.uuid}/extend`, { expirationMinutes: 15 }); if (r.body?.uuid) setBooking(r.body); };
+$("btnCancel").onclick = async () => { const r = await api("DELETE", `/bookings/${S.booking.uuid}`, { reason: "Test cancellation" }); if (r.body?.uuid) setBooking(r.body); };
+$("btnGet").onclick = async () => { const r = await api("GET", `/bookings/${S.booking.uuid}`); if (r.body?.uuid) setBooking(r.body); };
+</script>
+</body>
+</html>
